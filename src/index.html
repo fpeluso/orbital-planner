@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Orbital Transfer Planner - Interactive browser tool for space mission design with Hohmann and bi-elliptic transfer calculations">
+    <meta name="keywords" content="orbital mechanics, Hohmann transfer, bi-elliptic transfer, space mission design, astrodynamics">
+    <title>Orbital Transfer Planner | Space Mission Design Tool</title>
+
+    <!-- Preconnect to CDN -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles/main.css">
+
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="loading-icon">🚀</div>
+            <h2 class="loading-title">ORBITAL TRANSFER PLANNER</h2>
+            <p class="loading-subtitle">Initializing Python Environment</p>
+            <div class="loading-stage" id="loading-stage">Starting...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="loading-progress"></div>
+            </div>
+            <p class="loading-message" id="loading-message">Loading Pyodide runtime...</p>
+            <p style="margin-top: 1rem; font-size: 0.75rem; color: var(--text-secondary);">
+                Powered by Pyodide + WebAssembly<br>
+                <span style="color: var(--accent-secondary)">NumPy</span> •
+                <span style="color: var(--accent-secondary)">Matplotlib</span> •
+                <span style="color: var(--accent-secondary)">RK4 Integration</span>
+            </p>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="app-title">
+            <span class="app-icon">🚀</span>
+            <h1>ORBITAL TRANSFER PLANNER <span>| Space Mission Design Tool</span></h1>
+        </div>
+        <div class="status-indicator" id="status-indicator">
+            ● Initializing...
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="app-container">
+        <!-- Left Panel: Controls -->
+        <aside class="panel controls-panel">
+            <div class="panel-header">
+                <span class="panel-icon">⚙️</span>
+                <h2>Mission Parameters</h2>
+            </div>
+
+            <!-- Central Body Selection -->
+            <div class="control-group">
+                <label class="control-label" for="central-body">
+                    Central Body
+                    <span data-tooltip="Select the primary gravitational body for the mission">ℹ️</span>
+                </label>
+                <select id="central-body">
+                    <option value="earth">🌍 Earth (μ = 398600 km³/s²)</option>
+                    <option value="sun">☀️ Sun (μ = 1.327×10¹¹ km³/s²)</option>
+                </select>
+            </div>
+
+            <!-- Transfer Type -->
+            <div class="control-group">
+                <label class="control-label" for="transfer-type">
+                    Transfer Type
+                    <span data-tooltip="Hohmann: 2 burns | Bi-elliptic: 3 burns, may be more efficient for large radius ratios">ℹ️</span>
+                </label>
+                <select id="transfer-type">
+                    <option value="hohmann">Hohmann Transfer</option>
+                    <option value="bielliptic">Bi-elliptic Transfer</option>
+                    <option value="both">Compare Both</option>
+                </select>
+            </div>
+
+            <!-- Initial Orbit Radius -->
+            <div class="control-group">
+                <label class="control-label" for="r1-slider">
+                    Initial Orbit (r₁)
+                    <span class="control-value" id="r1-value">6,571 km</span>
+                </label>
+                <input type="range" id="r1-slider" min="6671" max="50000" step="100" value="6571">
+            </div>
+
+            <!-- Final Orbit Radius -->
+            <div class="control-group">
+                <label class="control-label" for="r2-slider">
+                    Final Orbit (r₂)
+                    <span class="control-value" id="r2-value">42,164 km</span>
+                </label>
+                <input type="range" id="r2-slider" min="6671" max="500000" step="1000" value="42164">
+            </div>
+
+            <!-- Bi-elliptic Intermediate Radius -->
+            <div class="control-group" id="rb-container" style="display: none;">
+                <label class="control-label" for="rb-slider">
+                    Intermediate Apoapsis (r_b)
+                    <span class="control-value" id="rb-value">80,000 km</span>
+                </label>
+                <input type="range" id="rb-slider" min="70000" max="1000000" step="5000" value="80000">
+            </div>
+
+            <!-- Preset Buttons -->
+            <div class="control-group">
+                <label class="control-label">Quick Presets</label>
+                <div class="preset-container">
+                    <button class="preset-btn" id="preset-leo-geo" data-tooltip="Low Earth Orbit to Geostationary">LEO → GEO</button>
+                    <button class="preset-btn" id="preset-leo-moon" data-tooltip="Low Earth Orbit to Lunar orbit">LEO → Moon</button>
+                    <button class="preset-btn" id="preset-earth-mars" data-tooltip="Earth orbit to Mars orbit">Earth → Mars</button>
+                    <button class="preset-btn" id="preset-earth-jupiter" data-tooltip="Earth orbit to Jupiter orbit">Earth → Jupiter</button>
+                </div>
+            </div>
+
+            <!-- Calculate Button -->
+            <button class="calculate-btn" id="calculate-btn">
+                Recalculate Transfer
+            </button>
+        </aside>
+
+        <!-- Center Panel: Visualization -->
+        <section class="panel viz-panel">
+            <div class="panel-header">
+                <span class="panel-icon">📊</span>
+                <h2>Orbit Visualization</h2>
+            </div>
+            <div class="viz-container">
+                <canvas id="orbit-plot" class="plot-canvas"></canvas>
+                <div id="plot-placeholder" class="plot-placeholder">
+                    <div class="plot-placeholder-icon">🛰️</div>
+                    <p>Orbit visualization will appear here</p>
+                    <p style="font-size: 0.8125rem; margin-top: 0.5rem;">
+                        Adjust parameters and click Recalculate to generate plots
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel: Results -->
+        <aside class="panel results-panel">
+            <div class="panel-header">
+                <span class="panel-icon">📈</span>
+                <h2>Mission Results</h2>
+            </div>
+
+            <div class="results-grid">
+                <div class="result-item">
+                    <span class="result-label">Δv₁ (Departure)</span>
+                    <span class="result-value" id="dv1-display">-- km/s</span>
+                </div>
+                <div class="result-item">
+                    <span class="result-label">Δv₂ (Arrival)</span>
+                    <span class="result-value" id="dv2-display">-- km/s</span>
+                </div>
+                <div class="result-item" style="display: none;">
+                    <span class="result-label">Δv₃ (Bi-elliptic)</span>
+                    <span class="result-value" id="dv3-display">-- km/s</span>
+                </div>
+                <div class="result-item dv-total">
+                    <span class="result-label">Total Δv Budget</span>
+                    <span class="result-value" id="dv-total-display">-- km/s</span>
+                </div>
+                <div class="result-item">
+                    <span class="result-label">Time of Flight</span>
+                    <span class="result-value" id="tof-display">-- days</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Bottom Panel: Information -->
+        <section class="panel info-panel">
+            <div class="panel-header">
+                <span class="panel-icon">📖</span>
+                <h2>Mission Analysis</h2>
+            </div>
+            <div class="info-content" id="info-panel">
+                <h4>Welcome to Orbital Transfer Planner</h4>
+                <p>
+                    This interactive tool calculates optimal orbital transfers using the
+                    <strong>vis-viva equation</strong> and <strong>RK4 numerical integration</strong>.
+                </p>
+                <p>
+                    Select your <strong>central body</strong> (Earth or Sun), choose a <strong>transfer type</strong>,
+                    and adjust the orbital radii to see real-time calculations and visualizations.
+                </p>
+                <h4>Key Concepts</h4>
+                <p><strong>Hohmann Transfer:</strong> The most fuel-efficient two-impulse transfer between coplanar circular orbits. Optimal for most transfers.</p>
+                <p><strong>Bi-elliptic Transfer:</strong> Uses three burns via an intermediate apoapsis. More efficient than Hohmann when r₂/r₁ &gt; 11.94.</p>
+                <h4>Mathematical Foundation</h4>
+                <p>All calculations use the two-body equation of motion:</p>
+                <p class="equation">r̈ = −μ/|r|³ · r</p>
+                <p>Where μ is the gravitational parameter and r is the position vector.</p>
+                <p>The vis-viva equation gives orbital velocity:</p>
+                <p class="equation">v = √[μ(2/r − 1/a)]</p>
+                <p>Where a is the semi-major axis of the orbit.</p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <p>
+            Orbital Transfer Planner • Built with
+            <a href="https://pyodide.org/" target="_blank" rel="noopener">Pyodide</a>,
+            <a href="https://numpy.org/" target="_blank" rel="noopener">NumPy</a>, &
+            <a href="https://matplotlib.org/" target="_blank" rel="noopener">Matplotlib</a>
+            •
+            <a href="https://github.com/fpeluso/orbital-planner" target="_blank" rel="noopener">View on GitHub</a>
+        </p>
+    </footer>
+
+    <!-- Main Application Script -->
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

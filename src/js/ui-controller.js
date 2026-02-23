@@ -176,8 +176,24 @@ class UIController {
      * Calculate the orbital transfer using Python
      */
     async calculateTransfer() {
+        console.log('[UIController] calculateTransfer called', {
+            currentBody: this.currentBody,
+            transferType: this.transferType,
+            r1: this.r1,
+            r2: this.r2,
+            rb: this.rb,
+            isReady: pyodideLoader.isReady,
+            modulesLoaded: pyodideLoader.areModulesLoaded()
+        });
+
         if (!pyodideLoader.isReady) {
-            console.log('Pyodide not ready yet, skipping calculation');
+            console.log('[UIController] Pyodide not ready yet, skipping calculation');
+            return;
+        }
+
+        if (!pyodideLoader.areModulesLoaded()) {
+            console.error('[UIController] Modules not loaded! Load errors:', pyodideLoader.getModuleLoadErrors());
+            this.showError('Python modules failed to load. Please refresh the page to try again.');
             return;
         }
 
@@ -189,81 +205,114 @@ class UIController {
             pyodideLoader.setGlobal('r2', this.r2);
             pyodideLoader.setGlobal('rb', this.rb);
 
-            // Run calculation
+            // Run calculation with comprehensive error handling
             const pythonCode = `
 import json
-import numpy as np
-from constants import get_central_body, EARTH_RADIUS, SUN_RADIUS, AU_KM
-from orbital_mechanics import hohmann_transfer, bielliptic_transfer
-from visualization import plot_transfer_comparison
-
-# Get central body parameters
-body = get_central_body(current_body)
-mu = body.mu
-
-# Convert units if necessary
-if current_body == 'sun':
-    # Convert AU to km for calculations
-    r1_km = r1 * AU_KM
-    r2_km = r2 * AU_KM
-    rb_km = rb * AU_KM
-    body_radius = SUN_RADIUS
-    distance_unit = 'AU'
-else:
-    r1_km = r1
-    r2_km = r2
-    rb_km = rb
-    body_radius = EARTH_RADIUS
-    distance_unit = 'km'
-
-# Calculate transfers
-hohmann_result = hohmann_transfer(r1_km, r2_km, mu)
+import traceback
+import sys
 
 try:
-    bielliptic_result = bielliptic_transfer(r1_km, r2_km, rb_km, mu)
-except ValueError as e:
-    bielliptic_result = {'error': str(e)}
+    import numpy as np
+    from constants import get_central_body, EARTH_RADIUS, SUN_RADIUS, AU_KM
+    from orbital_mechanics import hohmann_transfer, bielliptic_transfer
+    from visualization import plot_transfer_comparison
 
-# Generate plot
-plot_base64 = plot_transfer_comparison(
-    r1_km, r2_km, rb_km, mu,
-    body_radius, body.name,
-    distance_unit, transfer_type
-)
+    # Get central body parameters
+    body = get_central_body(current_body)
+    mu = body.mu
 
-# Format results
-result = {
-    'hohmann': {
-        'dv1': float(hohmann_result['dv1']),
-        'dv2': float(hohmann_result['dv2']),
-        'dv_total': float(hohmann_result['dv_total']),
-        'tof_hours': float(hohmann_result['tof'] / 3600),
-        'tof_days': float(hohmann_result['tof'] / 86400),
-    },
-    'bielliptic': None,
-    'plot': plot_base64,
-    'body': body.name,
-}
+    # Convert units if necessary
+    if current_body == 'sun':
+        # Convert AU to km for calculations
+        r1_km = r1 * AU_KM
+        r2_km = r2 * AU_KM
+        rb_km = rb * AU_KM
+        body_radius = SUN_RADIUS
+        distance_unit = 'AU'
+    else:
+        r1_km = r1
+        r2_km = r2
+        rb_km = rb
+        body_radius = EARTH_RADIUS
+        distance_unit = 'km'
 
-if 'error' not in bielliptic_result:
-    result['bielliptic'] = {
-        'dv1': float(bielliptic_result['dv1']),
-        'dv2': float(bielliptic_result['dv2']),
-        'dv3': float(bielliptic_result['dv3']),
-        'dv_total': float(bielliptic_result['dv_total']),
-        'tof_days': float(bielliptic_result['tof'] / 86400),
+    # Calculate transfers
+    hohmann_result = hohmann_transfer(r1_km, r2_km, mu)
+
+    try:
+        bielliptic_result = bielliptic_transfer(r1_km, r2_km, rb_km, mu)
+    except ValueError as e:
+        bielliptic_result = {'error': str(e)}
+
+    # Generate plot
+    plot_base64 = plot_transfer_comparison(
+        r1_km, r2_km, rb_km, mu,
+        body_radius, body.name,
+        distance_unit, transfer_type
+    )
+
+    # Format results
+    result = {
+        'hohmann': {
+            'dv1': float(hohmann_result['dv1']),
+            'dv2': float(hohmann_result['dv2']),
+            'dv_total': float(hohmann_result['dv_total']),
+            'tof_hours': float(hohmann_result['tof'] / 3600),
+            'tof_days': float(hohmann_result['tof'] / 86400),
+        },
+        'bielliptic': None,
+        'plot': plot_base64,
+        'body': body.name,
     }
 
-json.dumps(result)
+    if 'error' not in bielliptic_result:
+        result['bielliptic'] = {
+            'dv1': float(bielliptic_result['dv1']),
+            'dv2': float(bielliptic_result['dv2']),
+            'dv3': float(bielliptic_result['dv3']),
+            'dv_total': float(bielliptic_result['dv_total']),
+            'tof_days': float(bielliptic_result['tof'] / 86400),
+        }
+
+    # Success - return result as JSON
+    json.dumps(result)
+
+except Exception as e:
+    # Always return valid JSON, even on error
+    error_result = {
+        'error': str(e),
+        'traceback': traceback.format_exc(),
+        'type': type(e).__name__
+    }
+    json.dumps(error_result)
 `;
 
             const jsonResult = await pyodideLoader.runPython(pythonCode);
-            this.results = JSON.parse(jsonResult);
+            
+            // Parse with error handling
+            let parsedResult;
+            try {
+                parsedResult = JSON.parse(jsonResult);
+            } catch (parseError) {
+                console.error('[UIController] Failed to parse Python result as JSON:', parseError);
+                console.error('[UIController] Raw result:', jsonResult);
+                this.showError(`Failed to parse calculation results: ${parseError.message}. Raw output: ${jsonResult.substring(0, 500)}`);
+                return;
+            }
+
+            // Check for error in result
+            if (parsedResult.error) {
+                console.error('[UIController] Python calculation error:', parsedResult);
+                this.showError(`Calculation error: ${parsedResult.error}\n\nTraceback:\n${parsedResult.traceback || 'No traceback available'}`);
+                return;
+            }
+
+            this.results = parsedResult;
             this.updateResults();
             this.updatePlot();
 
         } catch (error) {
-            console.error('Calculation error:', error);
+            console.error('[UIController] Calculation error:', error);
             this.showError(`Calculation failed: ${error.message}`);
         }
     }

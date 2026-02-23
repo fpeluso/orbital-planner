@@ -11,6 +11,9 @@ class PyodideLoader {
         this.loadingProgress = 0;
         this.onProgressCallbacks = [];
         this.onReadyCallbacks = [];
+        this.loadedModules = new Map();
+        this.failedModules = [];
+        this.maxRetries = 3;
     }
 
     /**
@@ -114,7 +117,7 @@ class PyodideLoader {
     }
 
     /**
-     * Load custom Python modules from the project
+     * Load custom Python modules from the project with retry logic
      */
     async loadPythonModules() {
         const modules = [
@@ -124,24 +127,78 @@ class PyodideLoader {
             { name: 'visualization.py', path: './python/visualization.py' },
         ];
 
+        this.loadedModules.clear();
+        this.failedModules = [];
+
         for (const mod of modules) {
             this.updateProgress('loading-modules', 70 + (modules.indexOf(mod) / modules.length) * 20,
                 `Loading ${mod.name}...`);
 
-            try {
-                const response = await fetch(mod.path);
-                if (!response.ok) {
-                    console.warn(`Could not load ${mod.path}, will use inline fallback`);
-                    continue;
-                }
-                const code = await response.text();
+            let success = false;
+            let lastError = null;
 
-                // Write to Pyodide filesystem
-                this.pyodide.FS.writeFile(mod.name, code);
-            } catch (error) {
-                console.warn(`Error loading ${mod.name}:`, error);
+            for (let attempt = 1; attempt <= this.maxRetries && !success; attempt++) {
+                try {
+                    console.log(`[PyodideLoader] Attempting to load ${mod.name} (attempt ${attempt}/${this.maxRetries})`);
+                    
+                    const response = await fetch(mod.path);
+                    
+                    if (!response.ok) {
+                        const error = new Error(`HTTP ${response.status}: ${response.statusText} for ${mod.path}`);
+                        console.warn(`[PyodideLoader] Failed to fetch ${mod.path}:`, error.message);
+                        
+                        if (attempt < this.maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                        }
+                        lastError = error;
+                        continue;
+                    }
+                    
+                    const code = await response.text();
+
+                    if (!code || code.trim().length === 0) {
+                        const error = new Error(`Empty response for ${mod.path}`);
+                        console.warn(`[PyodideLoader] Empty file: ${mod.name}`);
+                        
+                        if (attempt < this.maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                        }
+                        lastError = error;
+                        continue;
+                    }
+
+                    // Write to Pyodide filesystem
+                    this.pyodide.FS.writeFile(mod.name, code);
+                    
+                    this.loadedModules.set(mod.name, { path: mod.path, loadedAt: new Date() });
+                    console.log(`[PyodideLoader] Successfully loaded ${mod.name}`);
+                    success = true;
+                    
+                } catch (error) {
+                    console.error(`[PyodideLoader] Error loading ${mod.name} (attempt ${attempt}):`, error);
+                    lastError = error;
+                    
+                    if (attempt < this.maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                    }
+                }
+            }
+
+            if (!success) {
+                const errorMsg = `Failed to load ${mod.name} after ${this.maxRetries} attempts: ${lastError?.message || 'Unknown error'}`;
+                console.error(`[PyodideLoader] ${errorMsg}`);
+                this.failedModules.push({ name: mod.name, error: lastError });
             }
         }
+
+        // Report final module status
+        if (this.failedModules.length > 0) {
+            const failedNames = this.failedModules.map(m => m.name).join(', ');
+            console.error(`[PyodideLoader] Module loading failed for: ${failedNames}`);
+            throw new Error(`Failed to load Python modules: ${failedNames}. Please check your network connection and refresh the page.`);
+        }
+
+        console.log(`[PyodideLoader] All ${modules.length} modules loaded successfully`);
     }
 
     /**
@@ -157,18 +214,21 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# Import our custom modules
-try:
-    import constants
-    import orbital_mechanics
-    import numerical_integration
-    import visualization
-except ImportError as e:
-    print(f"Warning: Could not import custom modules: {e}")
+# Verify modules were loaded successfully
+import constants
+import orbital_mechanics
+import numerical_integration
+import visualization
 
 print("Python environment initialized successfully!")
 `;
-        await this.pyodide.runPythonAsync(initCode);
+        try {
+            await this.pyodide.runPythonAsync(initCode);
+            console.log('[PyodideLoader] Environment initialized, all Python modules imported');
+        } catch (error) {
+            console.error('[PyodideLoader] Failed to initialize Python environment:', error);
+            throw new Error(`Python module import failed: ${error.message}. The Python modules may have syntax errors or missing dependencies.`);
+        }
     }
 
     /**
@@ -199,6 +259,21 @@ print("Python environment initialized successfully!")
             throw new Error('Pyodide is not ready yet.');
         }
         this.pyodide.globals.set(name, value);
+    }
+
+    /**
+     * Check if all required modules are loaded
+     */
+    areModulesLoaded() {
+        const requiredModules = ['constants.py', 'orbital_mechanics.py', 'numerical_integration.py', 'visualization.py'];
+        return requiredModules.every(mod => this.loadedModules.has(mod));
+    }
+
+    /**
+     * Get information about module loading errors
+     */
+    getModuleLoadErrors() {
+        return this.failedModules.map(m => ({ name: m.name, error: m.error?.message || String(m.error) }));
     }
 }
 

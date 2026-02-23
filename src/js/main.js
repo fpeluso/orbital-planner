@@ -41,6 +41,19 @@ function initializeLoadingScreen() {
             // Enable UI interactions
             enableUI();
 
+            // Check if modules loaded properly before calculation
+            if (!pyodideLoader.areModulesLoaded()) {
+                console.error('[Main] Modules failed to load! Errors:', pyodideLoader.getModuleLoadErrors());
+                const loadingMessage = document.getElementById('loading-message');
+                if (loadingMessage) {
+                    loadingMessage.textContent = 'Error: Python modules failed to load. Please refresh the page.';
+                    loadingMessage.style.color = '#ff6b6b';
+                }
+                return;
+            }
+
+            console.log('[Main] All modules loaded, starting initial calculation');
+
             // Perform initial calculation
             uiController.calculateTransfer();
         }, 500);
